@@ -1,0 +1,6 @@
+*~
+#*#
+*.o
+*.hi
+http-server
+http-example
