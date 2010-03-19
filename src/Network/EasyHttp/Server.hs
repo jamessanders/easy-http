@@ -20,6 +20,7 @@ import Data.Time
 import Network.EasyHttp.Types
 
 import Network.Socket
+import Network.BSD
 import Network.Socket.SendFile
 
 import System.Directory
@@ -124,8 +125,16 @@ httpServe a = putCode Found >> putBody a
 
 -- Server -----------------------------------------------------------
 
-startServer port hndl = do
-  bracket (N.listenOn (N.PortNumber port))
+startSocket = do
+  proto <- getProtocolNumber "tcp"
+  socket AF_INET Stream proto
+
+startServer addr port hndl = do
+  addr' <- inet_addr addr
+  bracket (do sock <- startSocket
+              bindSocket sock (SockAddrInet (fromInteger port) (addr'))
+              listen sock maxListenQueue
+              return sock)
           (\s-> N.sClose s)
           (\s-> doAccept s)
   where doAccept sock = do 
@@ -139,8 +148,8 @@ startServer port hndl = do
           )
 
 
-startHTTP :: N.PortNumber -> ServerMonad () -> IO ()
-startHTTP port = startServer port . httpService 
+startHTTP :: String -> Integer -> ServerMonad () -> IO ()
+startHTTP addr port = startServer addr port . httpService 
     where httpService f sock sa next = 
             withHeaders sa $ \hds-> do 
               debugServer (getReqPath hds)
