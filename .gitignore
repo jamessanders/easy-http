@@ -4,3 +4,4 @@
 *.hi
 http-server
 http-example
+dist/
