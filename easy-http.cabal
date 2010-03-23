@@ -31,5 +31,6 @@ Library
                  directory >= 1.0.1.0,
                  sendfile >= 0.6.1,
                  mtl >= 1.1.0.2,
-                 time >= 1.1.4
+                 time >= 1.1.4,
+                 regex-posix >= 0.94.1
                  

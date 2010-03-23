@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings, TypeSynonymInstances, RankNTypes, FlexibleInstances #-}
 {- a simple http server, not meant to be fast or very good, just easy to use -}
 module Network.EasyHttp.Server (module Network.EasyHttp.Types
-                   , getRequest
                    , httpServe
                    , startHTTP
                    , getReq
                    , limitClients
+                   , dispatch
                    , debug
                    , debugs
                    ) where
@@ -32,6 +32,9 @@ import Text.Printf
 import System.Posix.Files
 import Data.MIME.Types
 import Data.IORef
+
+import Text.Regex.Posix
+import Text.Regex.Posix.Wrap
 
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy.Char8 as L
@@ -133,6 +136,7 @@ startSocket = do
 startServer addr port hndl = do
   addr' <- inet_addr addr
   bracket (do sock <- startSocket
+              setSocketOption sock ReuseAddr 1
               bindSocket sock (SockAddrInet (fromInteger port) (addr'))
               listen sock maxListenQueue
               return sock)
@@ -270,6 +274,17 @@ limitClients clients app = do
   if ip `elem` clients then app else debug ("Reject request from " ++ ip) >> putResp resp403
 
 getIP (SockAddrInet pn ha) = inet_ntoa ha
+
+
+dispatch :: [(String,ServerMonad ())] -> ServerMonad ()
+dispatch urls = do
+  rq <- getReq 
+  match' (getReqPath rq) (urls) >> return ()
+  where match' path (x:xs) = if path =~ (fst x)
+                              then (snd x)
+                              else match' path xs
+        match' _ [] = putResp resp403
+
 
 
 -- Utils -------------------------------------------------------
