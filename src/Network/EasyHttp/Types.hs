@@ -1,3 +1,4 @@
+
 {-# LANGUAGE OverloadedStrings, TypeSynonymInstances, 
   ExistentialQuantification, FlexibleInstances,
   UndecidableInstances, OverlappingInstances #-}
@@ -33,20 +34,20 @@ getRespCode    (Response c _ _) = c
 
 data Code = NotFound | Found | Forbidden | InternalError
 
-data ContentType = CT C.ByteString 
+newtype ContentType = CT C.ByteString 
 
 data ServerState = ServerState { _getReq :: Request , _getResp :: Response }
 type ServerMonad b = StateT ServerState IO b
 
 data ImageFile = JpegFile File | PngFile File
 
-data ImageData = ImageData C.ByteString
+newtype ImageData = ImageData C.ByteString
 
 data File = File { getFilePath :: FilePath
                  , getFileFileStatus :: FileStatus 
                  , getMimeType :: C.ByteString }
 
-data HTML a = HTML a
+newtype HTML a = HTML a
 
 class Servable a where
     serve :: a -> Socket -> IO ()
