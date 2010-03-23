@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings, TypeSynonymInstances, RankNTypes, FlexibleInstances #-}
 {- a simple http server, not meant to be fast or very good, just easy to use -}
 module Network.EasyHttp.Server (module Network.EasyHttp.Types
+                   , getRequest
                    , httpServe
                    , startHTTP
                    , getReq
