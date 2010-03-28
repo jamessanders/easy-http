@@ -6,6 +6,7 @@ module Network.EasyHttp.Server (module Network.EasyHttp.Types
                    , getReq
                    , limitClients
                    , dispatch
+                   , fileServer
                    , debug
                    , debugs
                    ) where
@@ -286,6 +287,12 @@ dispatch urls = do
         match' _ [] = putResp resp403
 
 
+fileServer :: FilePath -> ServerMonad ()
+fileServer path = do
+  rq <- fmap (C.unpack . getReqPath) getReq
+  let fp = (makeRelative path (tail rq))
+  debug fp
+  sendfile fp 
 
 -- Utils -------------------------------------------------------
 
