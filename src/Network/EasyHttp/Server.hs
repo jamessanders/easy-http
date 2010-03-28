@@ -287,12 +287,12 @@ dispatch urls = do
         match' _ [] = putResp resp403
 
 
-fileServer :: FilePath -> ServerMonad ()
-fileServer path = do
+fileServer :: String -> FilePath -> ServerMonad ()
+fileServer uri path = do
   rq <- fmap (C.unpack . getReqPath) getReq
-  let fp = (makeRelative path (tail rq))
-  debug fp
-  sendfile fp 
+  let fp = makeRelative uri rq
+  debug (path </> fp)
+  sendfile (path </> fp)
 
 -- Utils -------------------------------------------------------
 
