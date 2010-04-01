@@ -15,11 +15,14 @@ import Control.Concurrent
 import Control.Exception (bracket)
 import Control.Monad.State
 
+import Data.Attoparsec.Char8
 import Data.Char
+import Data.List
 import Data.Maybe
 import Data.Time
 
 import Network.EasyHttp.Types
+import Networl.EasyHttp.RFC2616
 
 import Network.Socket
 import Network.BSD
@@ -168,9 +171,12 @@ startHTTP addr port = startServer addr port . httpService
 
                  withHeaders sockAddr next = do
                    h  <- readTillEnd ""
+                   print h
                    if C.length h == 0 
                      then return sClose
-                     else next . snd $ execState parse (h,emptyRequest sockAddr)
+                     else do let (leftovers,headers) = parse' h (emptyRequest sockAddr)
+                             print leftovers
+                             next headers
                    where 
                      readTillEnd x = do i <- catch (NB.recv sock 8192) (\_->return "")
                                         if C.length i == 0
@@ -185,50 +191,17 @@ startHTTP addr port = startServer addr port . httpService
                                           || C.isInfixOf "\r\r" i
 
                      parse :: State (C.ByteString,Request) ()
-                     parse = do parseRqType 
-                                parseRqPath 
-                                parseUrlParams
-                                parseProtocol                              
-                                parseHeaders 
+                     parse str rq = let Done left (prq,heads) = parse request str
+                                    in rq { getReqType = requestMethod prq
+                                          , getReqPath = requestUri    prq
+                                          } --TODO FIX THIS
 
-                     ws f = do st <- get
-                               put (f st)
-
-                     parseRqType = ws $ \(s,rq) ->
-                                      let (x,y) = C.break (== ' ') s
-                                      in (C.tail y
-                                         ,rq { getReqType = 
-                                                   case x of
-                                                     "GET" -> GET
-                                                     "POST"-> POST 
-                                                     "HEAD"-> HEAD
-                                             })
-
-                     parseRqPath   = ws $ \(s,rq) ->
-                                        let (x,y) = C.break (\x-> x == '?' || x == ' ') s
-                                        in (C.dropWhile (== '?') y,rq { getReqPath = x })
-
-                     parseUrlParams= ws $ \(s,rq) ->
-                                     let (x,y) = C.break isSpace s ;
-                                         args  = if C.null x 
-                                                   then [] 
-                                                   else map a2tup $ map (splitup (== '=') []) (splitup (== '&') [] x) in
-                                     (y,rq { getGetParams = args })
-                                     
-
-                     parseProtocol = ws $ \(s,rq) ->
-                                        let (x,y) = (C.break (== ' ') . dropTillWS) $ s
-                                        in (y,rq)
-
-                     parseHeaders  = ws $ \(s,rq) -> 
-                                     let l = (tail . lines') s
-                                     in ("",rq { getReqHeaders = 
-                                                 M.fromList . parseHeaders' $ l })
-
-                     parseHeaders' []     = []
-                     parseHeaders' (x:xs) = let (key,value) = C.break (== ':') x in
-                                           (key,(C.dropWhile isSpace . C.drop 1 $ value)) : parseHeaders' xs
-
+breakH x = let (a,b) = tillEnd (C.unpack x) ("","") in (C.pack a,C.pack b)
+    where tillEnd [] x = x
+          tillEnd (x:xs) (a,b) = if "\r\n\r\n" isPrefixOf xs
+                                 || "\n\n"     isPrefixOf xs
+                                  then (a ++ x,xs)
+                                  else tillEnd xs (a ++ x,b)
                      
 ------------------------------------------------------------------------
 
@@ -295,6 +268,8 @@ fileServer uri path = do
   sendfile (path </> fp)
 
 -- Utils -------------------------------------------------------
+
+isAtEOL x = (C.isPrefixOf (C.pack "\r\n") x) || (C.isPrefixOf (C.pack "\n") x)
 
 lines' "" = []
 lines' x  = let bl x = x `elem` "\r\n"
