@@ -22,7 +22,7 @@ import Data.Maybe
 import Data.Time
 
 import Network.EasyHttp.Types
-import Networl.EasyHttp.RFC2616
+import Network.EasyHttp.RFC2616
 
 import Network.Socket
 import Network.BSD
