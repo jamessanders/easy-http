@@ -15,14 +15,13 @@ import Control.Concurrent
 import Control.Exception (bracket)
 import Control.Monad.State
 
-import Data.Attoparsec.Char8
+import Data.Attoparsec.Char8 
 import Data.Char
 import Data.List
 import Data.Maybe
 import Data.Time
 
 import Network.EasyHttp.Types
-import Network.EasyHttp.RFC2616
 
 import Network.Socket
 import Network.BSD
@@ -45,6 +44,7 @@ import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Data.ByteString.Lazy.Internal as LI
 import qualified Data.Map as M
 import qualified Network as N
+import qualified Network.EasyHttp.RFC2616 as R
 import qualified Network.Socket.ByteString as NB
 
 -- Classes ----------------------------------------------------
@@ -171,12 +171,12 @@ startHTTP addr port = startServer addr port . httpService
 
                  withHeaders sockAddr next = do
                    h  <- readTillEnd ""
-                   print h
                    if C.length h == 0 
                      then return sClose
-                     else do let (leftovers,headers) = parse' h (emptyRequest sockAddr)
+                     else do let (leftovers,request) = parse' h (emptyRequest sockAddr)
                              print leftovers
-                             next headers
+                             print request
+                             next  request
                    where 
                      readTillEnd x = do i <- catch (NB.recv sock 8192) (\_->return "")
                                         if C.length i == 0
@@ -190,19 +190,28 @@ startHTTP addr port = startServer addr port . httpService
                                           || C.isInfixOf "\r\n\r\n" i
                                           || C.isInfixOf "\r\r" i
 
-                     parse :: State (C.ByteString,Request) ()
-                     parse str rq = let Done left (prq,heads) = parse request str
-                                    in rq { getReqType = requestMethod prq
-                                          , getReqPath = requestUri    prq
-                                          } --TODO FIX THIS
+                     --parse :: State (C.ByteString,Request) ()
+                     parse' str rq = let Done left (prq,headers) = parse R.request str
+                                         (rp,rg) = C.break (== '?') (R.requestUri prq)
+                                    in (left,rq { getReqType    = toRqType (R.requestMethod prq)
+                                                , getReqPath    = rp
+                                                , getReqHeaders = M.fromList (map simHeaders headers)
+                                                , getGetParams  = parseUrlParams rg
+                                                }) --TODO FIX THIS
 
-breakH x = let (a,b) = tillEnd (C.unpack x) ("","") in (C.pack a,C.pack b)
-    where tillEnd [] x = x
-          tillEnd (x:xs) (a,b) = if "\r\n\r\n" isPrefixOf xs
-                                 || "\n\n"     isPrefixOf xs
-                                  then (a ++ x,xs)
-                                  else tillEnd xs (a ++ x,b)
-                     
+                     toRqType x | x == "GET"  = GET
+                                | x == "POST" = POST
+                                | x == "HEAD" = HEAD
+                     toRqType x = undefined
+                     simHeaders (R.Header a b) = (a,head b)
+
+                     parseUrlParams s = let x = C.dropWhile (/= '?') s in
+                                        if C.null x 
+                                          then [] 
+                                          else map a2tup $ 
+                                               map (splitup (== '=') []) (splitup (== '&') [] (C.tail x)) 
+
+
 ------------------------------------------------------------------------
 
 emptyRequest = Request GET "/" (M.fromList []) []
