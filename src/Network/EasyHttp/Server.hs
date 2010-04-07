@@ -126,7 +126,7 @@ fromFilePath fp = do fs   <- lift $ getFileStatus fp
 
 sendfile fp = do
   exist <- lift $ doesFileExist fp
-  if exist then fromFilePath fp >>= httpServe 
+  if exist then fromFilePath fp >>= ok
            else putResp (resp404)
 
 ok a = putCode Found >> putBody a
