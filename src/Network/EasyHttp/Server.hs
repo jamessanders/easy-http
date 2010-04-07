@@ -151,10 +151,9 @@ startServer addr port hndl = do
           forkIO (hdlRequest s sa)
           doAccept sock
         hdlRequest s sa =
-          (do a <- hndl s sa (hdlRequest s sa)
-              catch (a s) (\e->putStrLn (show e) >> sClose s)
-              return ()
-          )
+            do a <- hndl s sa (hdlRequest s sa)
+               catch (a s) (\e->putStrLn (show e) >> sClose s)
+               return ()
 
 
 startHTTP :: String -> Integer -> ServerMonad () -> IO ()
@@ -174,8 +173,8 @@ startHTTP addr port = startServer addr port . httpService
                    if C.length h == 0 
                      then return sClose
                      else do let (leftovers,request) = parse' h (emptyRequest sockAddr)
-                             print leftovers
-                             print request
+                             --print leftovers
+                             --print request
                              next  request
                    where 
                      readTillEnd x = do i <- catch (NB.recv sock 8192) (\_->return "")
