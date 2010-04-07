@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings, TypeSynonymInstances, RankNTypes, FlexibleInstances #-}
 {- a simple http server, not meant to be fast or very good, just easy to use -}
 module Network.EasyHttp.Server (module Network.EasyHttp.Types
-                   , httpServe
+                   , ok
                    , startHTTP
                    , getReq
                    , limitClients
@@ -129,7 +129,7 @@ sendfile fp = do
   if exist then fromFilePath fp >>= httpServe 
            else putResp (resp404)
 
-httpServe a = putCode Found >> putBody a
+ok a = putCode Found >> putBody a
 
 -- Server -----------------------------------------------------------
 
