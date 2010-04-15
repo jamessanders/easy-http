@@ -2,6 +2,7 @@
 {- a simple http server, not meant to be fast or very good, just easy to use -}
 module Network.EasyHttp.Server (module Network.EasyHttp.Types
                                , ok
+                               , notFound
                                , redirect
                                , startHTTP
                                , getReq
@@ -131,6 +132,7 @@ sendfile fp = do
            else putResp (resp404)
 
 ok a = putCode Found >> putBody a
+notFound = putResp resp404
 redirect a = putCode MovedPermanently >> putHeader "Location" a
 -- Server -----------------------------------------------------------
 
