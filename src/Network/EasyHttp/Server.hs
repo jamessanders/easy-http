@@ -2,6 +2,7 @@
 {- a simple http server, not meant to be fast or very good, just easy to use -}
 module Network.EasyHttp.Server (module Network.EasyHttp.Types
                                , ok
+                               , serverFail
                                , notFound
                                , redirect
                                , startHTTP
@@ -81,17 +82,17 @@ instance Servable a => Servable (HTML a) where
 
 instance Servable Response where
     serve (Response c h b) s = do 
-      let a  = ["HTTP/1.1 ",(showbs c),"\n"]
+      let a  = ["HTTP/1.1 ",(showbs c),"\r\n"]
       let ct = ((showbs) 
                 (fromMaybe (CT "text/plain") 
                 (getContentType b)))  
       let cl = getContentLength b 
-      let hdrs = M.insert "Connection" "Keep-Alive" $ M.insert  "Content-type" ct $ (M.insert "Content-length" (showbs cl) h)
-      NB.sendAll s $ foldl C.append "" a
-      NB.sendAll s (C.unlines . map showbs . toHeaders $ hdrs) 
-      NB.sendAll s "\n"
+      let hdrs = M.insert "Server" "Easy-HTTP"
+                 $ M.insert "Content-Type" ct 
+                 $ M.insert "Content-Length" (showbs cl) h
+      let h = intersperse "\r\n" (map showbs . toHeaders $ hdrs)
+      NB.sendMany s (a ++ h ++ ["\r\n\r\n"])
       serve (getContent b) s
-
 
 -- Things that can be served via HTTP...
 
@@ -132,6 +133,7 @@ sendfile fp = do
            else putResp (resp404)
 
 ok a = putCode Found >> putBody a
+serverFail a = putCode InternalError >> putBody a
 notFound = putResp resp404
 redirect a = putCode MovedPermanently >> putHeader "Location" a
 -- Server -----------------------------------------------------------
@@ -165,7 +167,10 @@ startHTTP addr port = startServer addr port . httpService
             withHeaders sa $ \hds-> do 
               debugServer (getReqPath hds)
               rsp <- fmap _getResp (runHttpHandler hds)
-              return (\s->serve rsp s >> next)
+              let conn = fromMaybe "Keep-Alive" (M.lookup "Connection" $ getReqHeaders hds)
+              if conn == "close"
+                 then return $ (\s->serve (putHeaders rsp $ M.insert "Connection" "close" (getHeaders rsp)) s >> sClose s)
+                 else return $ (\s->serve (putHeaders rsp $ M.insert "Connection" "keep-alive" (getHeaders rsp) ) s >> next)
           
            where runHttpHandler hds = do 
                    catch (execStateT f (ServerState hds emptyResponse ))
@@ -220,16 +225,18 @@ emptyRequest = Request GET "/" (M.fromList []) []
 
 toHeaders = map (\(k,v)->Header k v) . M.toList
 
-resp500 str = Response InternalError (M.fromList [("Content-type","text/plain")
-                                                 ,("Content-length",len)]) (str :: C.ByteString)
+
+
+resp500 str = Response InternalError (M.fromList [("Content-Type","text/plain")
+                                                 ,("Content-Length",len)]) (str :: C.ByteString)
               where len = C.pack . show $ C.length str
 
 
-resp404 = Response NotFound (M.fromList [("Content-type","text/plain")
-                                        ,("Content-length","9")]) ("Not Found" :: C.ByteString)
+resp404 = Response NotFound (M.fromList [("Content-Type","text/plain")
+                                        ,("Content-Length","9")]) ("Not Found" :: C.ByteString)
 emptyResponse = resp404
-resp403 = Response Forbidden (M.fromList [("Content-type","text/plain")
-                                         ,("Content-length","9")]) ("Forbidden" :: C.ByteString)
+resp403 = Response Forbidden (M.fromList [("Content-Type","text/plain")
+                                         ,("Content-Length","9")]) ("Forbidden" :: C.ByteString)
 
 putResp :: Response -> ServerMonad ()
 putResp rsp = do { st <- get ; put st {_getResp = rsp}; return () }
@@ -244,8 +251,8 @@ putCode cd = updateResp $ \(Response a h b) -> Response cd h b
 putHeader k v = updateResp $ \rsp -> putHeaders rsp (M.insert k v $  getHeaders rsp)
 
 putCT,putCL :: C.ByteString -> ServerMonad ()
-putCT = putHeader "Content-type"
-putCL = putHeader "Content-length"
+putCT = putHeader "Content-Type"
+putCL = putHeader "Content-Length"
 
 getResp = fmap _getResp get
 
