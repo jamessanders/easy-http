@@ -6,6 +6,7 @@ module Network.EasyHttp.Server (module Network.EasyHttp.Types
                                , notFound
                                , redirect
                                , startHTTP
+                               , startHTTP'
                                , getReq
                                , limitClients
                                , dispatch
@@ -142,7 +143,7 @@ startSocket = do
   proto <- getProtocolNumber "tcp"
   socket AF_INET Stream proto
 
-startServer addr port hndl = do
+startServer addr port postconn hndl = do
   addr' <- inet_addr addr
   bracket (do sock <- startSocket
               setSocketOption sock ReuseAddr 1
@@ -150,7 +151,10 @@ startServer addr port hndl = do
               listen sock maxListenQueue
               return sock)
           (\s-> N.sClose s)
-          (\s-> doAccept s)
+          (\s-> do case postconn of 
+                     (Just pc) -> pc s
+                     Nothing   -> return ()
+                   doAccept s)
   where doAccept sock = do 
           (s,sa) <- accept sock
           forkIO (hdlRequest s sa)
@@ -160,9 +164,14 @@ startServer addr port hndl = do
                catch (a s) (\e->putStrLn (show e) >> sClose s)
                return ()
 
+startHTTP addr port hdl = startHTTP' addr port Nothing hdl
 
-startHTTP :: String -> Integer -> ServerMonad () -> IO ()
-startHTTP addr port = startServer addr port . httpService 
+startHTTP' :: String                  -- Host
+          -> Integer                 -- Port
+          -> Maybe (Socket -> IO ()) -- Post connect callback
+          -> ServerMonad ()          -- Request handler
+          -> IO () 
+startHTTP' addr port pc = startServer addr port pc . httpService 
     where httpService f sock sa next = 
             withHeaders sa $ \hds-> do 
               debugServer (getReqPath hds)
