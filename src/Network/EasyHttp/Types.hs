@@ -16,7 +16,7 @@ import Data.IORef
 data Request = Request { getReqType :: RqType
                        , getReqPath :: RqPath 
                        , getReqHeaders :: Headers
-                       , getGetParams :: [(C.ByteString,C.ByteString)]
+                       , getParams :: [(C.ByteString,C.ByteString)]
                        , getClientAddr :: SockAddr } deriving (Show) 
 
 data Header  = Header C.ByteString C.ByteString

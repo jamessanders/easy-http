@@ -30,6 +30,7 @@ import Network.EasyHttp.Types
 import Network.Socket
 import Network.BSD
 import Network.Socket.SendFile
+import Network.URI (unEscapeString)
 
 import System.Directory
 import System.FilePath
@@ -190,9 +191,8 @@ startHTTP' addr port pc = startServer addr port pc . httpService
                    if C.length h == 0 
                      then return sClose
                      else do let (leftovers,request) = parse' h (emptyRequest sockAddr)
-                             --print leftovers
-                             --print request
-                             next  request
+                             post <- readPost request leftovers 
+                             next (request { getParams = getParams request ++ post })
                    where 
                      readTillEnd x = do i <- catch (NB.recv sock 8192) (\_->return "")
                                         if C.length i == 0
@@ -206,13 +206,21 @@ startHTTP' addr port pc = startServer addr port pc . httpService
                                           || C.isInfixOf "\r\n\r\n" i
                                           || C.isInfixOf "\r\r" i
 
+                     readPost rq cur = case M.lookup "Content-Length" $ getReqHeaders rq of
+                                         Nothing -> return []
+                                         Just n  -> do dat <- if C.length cur >= read (C.unpack n)
+                                                               then return cur
+                                                               else do ex <- NB.recv sock (read (C.unpack n) - C.length cur)
+                                                                       return (cur `C.append` ex)
+                                                       return $ parseUrlParams' dat
+
                      --parse :: State (C.ByteString,Request) ()
                      parse' str rq = let Done left (prq,headers) = parse R.request str
                                          (rp,rg) = C.break (== '?') (R.requestUri prq)
                                     in (left,rq { getReqType    = toRqType (R.requestMethod prq)
                                                 , getReqPath    = rp
                                                 , getReqHeaders = M.fromList (map simHeaders headers)
-                                                , getGetParams  = parseUrlParams rg
+                                                , getParams  = parseUrlParams rg
                                                 }) --TODO FIX THIS
 
                      toRqType x | x == "GET"  = GET
@@ -221,12 +229,13 @@ startHTTP' addr port pc = startServer addr port pc . httpService
                      toRqType x = undefined
                      simHeaders (R.Header a b) = (a,head b)
 
-                     parseUrlParams s = let x = C.dropWhile (/= '?') s in
-                                        if C.null x 
-                                          then [] 
-                                          else map a2tup $ 
-                                               map (splitup (== '=') []) (splitup (== '&') [] (C.tail x)) 
-
+                     parseUrlParams s = let x = C.dropWhile (/= '?') s in 
+                                        if C.null x then [] else parseUrlParams' $ C.tail x
+                     parseUrlParams' x = map (\(x,y)-> let x' = C.unpack x
+                                                           y' = C.unpack y in (C.pack $ esc x', C.pack $ esc y')) $
+                                         map a2tup $ 
+                                         map (splitup (== '=') []) (splitup (== '&') [] x) 
+                         where esc = unEscapeString . map (\x->if x == '+' then ' ' else x)
 
 ------------------------------------------------------------------------
 
