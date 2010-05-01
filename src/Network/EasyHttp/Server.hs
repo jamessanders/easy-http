@@ -8,6 +8,7 @@ module Network.EasyHttp.Server (module Network.EasyHttp.Types
                                , startHTTP
                                , startHTTP'
                                , getReq
+                               , getParams
                                , limitClients
                                , dispatch
                                , fileServer
@@ -33,8 +34,10 @@ import Network.Socket.SendFile
 import Network.URI (unEscapeString)
 
 import System.Directory
+import System.Exit
 import System.FilePath
 import System.IO
+import System.Posix.Signals
 
 import Text.Printf
 import System.Posix.Files
@@ -155,10 +158,16 @@ startServer addr port postconn hndl = do
           (\s-> do case postconn of 
                      (Just pc) -> pc s
                      Nothing   -> return ()
+                   let end = Catch (putStrLn "Shutting Down Server..." >> sClose s >> exitSuccess)
+                   installHandler sigTERM end Nothing
+                   installHandler sigHUP  end Nothing
+                   installHandler sigKILL end Nothing
+                   installHandler sigQUIT end Nothing
+                   installHandler sigINT  end Nothing
                    doAccept s)
   where doAccept sock = do 
           (s,sa) <- accept sock
-          forkIO (hdlRequest s sa)
+          forkOS (hdlRequest s sa)
           doAccept sock
         hdlRequest s sa =
             do a <- hndl s sa (hdlRequest s sa)
@@ -167,7 +176,7 @@ startServer addr port postconn hndl = do
 
 startHTTP addr port hdl = startHTTP' addr port Nothing hdl
 
-startHTTP' :: String                  -- Host
+startHTTP' :: String                 -- Host
           -> Integer                 -- Port
           -> Maybe (Socket -> IO ()) -- Post connect callback
           -> ServerMonad ()          -- Request handler
@@ -192,6 +201,7 @@ startHTTP' addr port pc = startServer addr port pc . httpService
                      then return sClose
                      else do let (leftovers,request) = parse' h (emptyRequest sockAddr)
                              post <- readPost request leftovers 
+                             print post
                              next (request { getParams = getParams request ++ post })
                    where 
                      readTillEnd x = do i <- catch (NB.recv sock 8192) (\_->return "")
@@ -201,19 +211,21 @@ startHTTP' addr port pc = startServer addr port pc . httpService
                                             let j = (C.append x i)
                                             if C.null i || hasEnd j
                                               then return j
-                                              else print i >> readTillEnd j
+                                              else readTillEnd j
                          where hasEnd i = C.isInfixOf "\n\n" i
                                           || C.isInfixOf "\r\n\r\n" i
                                           || C.isInfixOf "\r\r" i
 
-                     readPost rq cur = case M.lookup "Content-Length" $ getReqHeaders rq of
-                                         Nothing -> return []
-                                         Just n  -> do dat <- if C.length cur >= read (C.unpack n)
-                                                               then return cur
-                                                               else do ex <- NB.recv sock (read (C.unpack n) - C.length cur)
-                                                                       return (cur `C.append` ex)
-                                                       return $ parseUrlParams' dat
-
+                     readPost rq cur = 
+                         case M.lookup "Content-Length" $ getReqHeaders rq of
+                           Nothing -> return []
+                           Just n  -> let n' = read . C.unpack $ n in 
+                                      do dat <- if C.length cur >= n'
+                                                 then return cur
+                                                 else do ex <- recvTill sock (n' - C.length cur)
+                                                         return (cur `C.append` ex)
+                                         return $ parseUrlParams' dat
+                           
                      --parse :: State (C.ByteString,Request) ()
                      parse' str rq = let Done left (prq,headers) = parse R.request str
                                          (rp,rg) = C.break (== '?') (R.requestUri prq)
@@ -304,6 +316,11 @@ fileServer uri path = do
   sendfile (path </> fp)
 
 -- Utils -------------------------------------------------------
+
+recvTill s n = do r <- NB.recv s n
+                  if C.length r < n then do rr <- recvTill s (n - C.length r)
+                                            return (r `C.append` rr)
+                                    else return r
 
 isAtEOL x = (C.isPrefixOf (C.pack "\r\n") x) || (C.isPrefixOf (C.pack "\n") x)
 
