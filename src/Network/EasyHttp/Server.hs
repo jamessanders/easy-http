@@ -80,15 +80,15 @@ instance Servable File where
     serve (File fp _ _) s = sendFile s fp
 
 instance Servable SC where
-    serve (SC a) s = serve a s
+    serve (SC a) = serve a
  
 instance Servable a => Servable (HTML a) where
-    serve (HTML a) s = serve a s
+    serve (HTML a) = serve a
 
 instance Servable Response where
     serve (Response c h b) s = do 
-      let a  = ["HTTP/1.1 ",(showbs c),"\r\n"]
-      let ct = ((showbs) 
+      let a  = ["HTTP/1.1 ",showbs c,"\r\n"]
+      let ct = (showbs 
                 (fromMaybe (CT "text/plain") 
                 (getContentType b)))  
       let cl = getContentLength b 
@@ -116,8 +116,8 @@ instance HttpContent C.ByteString where
 
 instance HttpContent File where
     getContentType   f = let a = getMimeType f in Just (CT a)
-    getContentLength f = sizeFromFp f
-    getContent       f = SC f
+    getContentLength   = sizeFromFp 
+    getContent         = SC 
 
 instance HttpContent ImageData where
     getContentType _   = Just (CT "image/jpeg")
@@ -135,7 +135,7 @@ fromFilePath fp = do fs   <- lift $ getFileStatus fp
 sendfile fp = do
   exist <- lift $ doesFileExist fp
   if exist then fromFilePath fp >>= ok
-           else putResp (resp404)
+           else putResp resp404
 
 ok a = putCode Found >> putBody a
 serverFail a = putCode InternalError >> putBody a
@@ -151,10 +151,10 @@ startServer addr port postconn hndl = do
   addr' <- inet_addr addr
   bracket (do sock <- startSocket
               setSocketOption sock ReuseAddr 1
-              bindSocket sock (SockAddrInet (fromInteger port) (addr'))
+              bindSocket sock (SockAddrInet (fromInteger port) addr')
               listen sock maxListenQueue
               return sock)
-          (\s-> N.sClose s)
+          N.sClose
           (\s-> do case postconn of 
                      (Just pc) -> pc s
                      Nothing   -> return ()
@@ -171,10 +171,10 @@ startServer addr port postconn hndl = do
           doAccept sock
         hdlRequest s sa =
             do a <- hndl s sa (hdlRequest s sa)
-               catch (a s) (\e->putStrLn (show e) >> sClose s)
+               catch (a s) print >> sClose s
                return ()
 
-startHTTP addr port hdl = startHTTP' addr port Nothing hdl
+startHTTP addr port = startHTTP' addr port Nothing
 
 startHTTP' :: String                 -- Host
           -> Integer                 -- Port
@@ -188,16 +188,16 @@ startHTTP' addr port pc = startServer addr port pc . httpService
               rsp <- fmap _getResp (runHttpHandler hds)
               let conn = fromMaybe "Keep-Alive" (M.lookup "Connection" $ getReqHeaders hds)
               if conn == "close"
-                 then return $ (\s->serve (putHeaders rsp $ M.insert "Connection" "close" (getHeaders rsp)) s >> sClose s)
-                 else return $ (\s->serve (putHeaders rsp $ M.insert "Connection" "keep-alive" (getHeaders rsp) ) s >> next)
+                 then return (\s->serve (putHeaders rsp $ M.insert "Connection" "close" (getHeaders rsp)) s >> sClose s)
+                 else return (\s->serve (putHeaders rsp $ M.insert "Connection" "keep-alive" (getHeaders rsp) ) s >> next)
           
-           where runHttpHandler hds = do 
+           where runHttpHandler hds =
                    catch (execStateT f (ServerState hds emptyResponse ))
                          (\e->return $ ServerState hds (resp500 (C.pack . show $ e)) )
 
                  withHeaders sockAddr next = do
                    h  <- readTillEnd ""
-                   if C.length h == 0 
+                   if C.null h 
                      then return sClose
                      else do let (leftovers,request) = parse' h (emptyRequest sockAddr)
                              post <- readPost request leftovers 
@@ -205,7 +205,7 @@ startHTTP' addr port pc = startServer addr port pc . httpService
                              next (request { getParams = getParams request ++ post })
                    where 
                      readTillEnd x = do i <- catch (NB.recv sock 8192) (\_->return "")
-                                        if C.length i == 0
+                                        if C.null i
                                           then return ""
                                           else do
                                             let j = (C.append x i)
@@ -245,15 +245,14 @@ startHTTP' addr port pc = startServer addr port pc . httpService
                                         if C.null x then [] else parseUrlParams' $ C.tail x
                      parseUrlParams' x = map (\(x,y)-> let x' = C.unpack x
                                                            y' = C.unpack y in (C.pack $ esc x', C.pack $ esc y')) $
-                                         map a2tup $ 
-                                         map (splitup (== '=') []) (splitup (== '&') [] x) 
+                                         map (a2tup . splitup (== '=') []) (splitup (== '&') [] x) 
                          where esc = unEscapeString . map (\x->if x == '+' then ' ' else x)
 
 ------------------------------------------------------------------------
 
 emptyRequest = Request GET "/" (M.fromList []) []
 
-toHeaders = map (\(k,v)->Header k v) . M.toList
+toHeaders = map (uncurry Header) . M.toList
 
 
 
@@ -301,9 +300,9 @@ getIP (SockAddrInet pn ha) = inet_ntoa ha
 dispatch :: [(String,ServerMonad ())] -> ServerMonad ()
 dispatch urls = do
   rq <- getReq 
-  match' (getReqPath rq) (urls) >> return ()
-  where match' path (x:xs) = if path =~ (fst x)
-                              then (snd x)
+  match' (getReqPath rq) urls >> return ()
+  where match' path (x:xs) = if path =~ fst x
+                              then snd x
                               else match' path xs
         match' _ [] = putResp resp403
 
@@ -322,12 +321,12 @@ recvTill s n = do r <- NB.recv s n
                                             return (r `C.append` rr)
                                     else return r
 
-isAtEOL x = (C.isPrefixOf (C.pack "\r\n") x) || (C.isPrefixOf (C.pack "\n") x)
+isAtEOL x = C.isPrefixOf (C.pack "\r\n") x || C.isPrefixOf (C.pack "\n") x
 
 lines' "" = []
 lines' x  = let bl x = x `elem` "\r\n"
                 (a,b) = C.break bl x
-            in  a:(lines' $ C.drop 1 b)
+            in  a: (lines' $ C.drop 1 b)
 
 dropTillWS = C.dropWhile (not . isSpace)
 takeTillWS = C.takeWhile (not . isSpace)
@@ -344,10 +343,10 @@ debugServer s = do
 
 splitup :: (Char -> Bool) -> [C.ByteString] -> C.ByteString -> [C.ByteString]
 splitup fn s x = next (C.break fn x)
-    where next (a,b) | b == C.empty = (a:s) 
+    where next (a,b) | b == C.empty = a:s
           next (a,b)  = splitup fn (a:s) (C.drop 1 b)
 
-a2tup y = let x = reverse y in (head x,head $ drop 1 x)
+a2tup y = let x = reverse y in (head x,x !! 1)
 -- debugServer _ = return ()
 
 debug :: (Debug a) => a -> ServerMonad ()
