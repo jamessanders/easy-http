@@ -9,6 +9,8 @@ module Network.EasyHttp.Server (module Network.EasyHttp.Types
                                , startHTTP'
                                , getReq
                                , getParams
+                               , lookupParam
+                               , lookupParam'
                                , limitClients
                                , dispatch
                                , fileServer
@@ -289,6 +291,15 @@ getResp = fmap _getResp get
 getReq :: ServerMonad Request 
 getReq  = fmap _getReq  get 
 
+
+lookupParam k = do params <- fmap getParams getReq
+                   return (lookup k params)
+
+lookupParam' k = do params <- fmap getParams getReq
+                    return (aux k params [])
+    where aux _ [] ls = ls
+          aux k ((a,b):xs) ls = let nls = if k == a then (b:ls) else ls
+                                 in aux k xs nls
 
 limitClients clients app = do
   rq <- getReq 
