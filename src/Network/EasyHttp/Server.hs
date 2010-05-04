@@ -9,6 +9,7 @@ module Network.EasyHttp.Server (module Network.EasyHttp.Types
                                , startHTTP'
                                , getReq
                                , getParams
+                               , lookupHeader
                                , lookupParam
                                , lookupParam'
                                , limitClients
@@ -221,12 +222,14 @@ startHTTP' addr port pc = startServer addr port pc . httpService
                      readPost rq cur = 
                          case M.lookup "Content-Length" $ getReqHeaders rq of
                            Nothing -> return []
-                           Just n  -> let n' = read . C.unpack $ n in 
-                                      do dat <- if C.length cur >= n'
-                                                 then return cur
-                                                 else do ex <- recvTill sock (n' - C.length cur)
-                                                         return (cur `C.append` ex)
-                                         return $ parseUrlParams' dat
+                           Just n  -> if n == "0" 
+                                        then return []
+                                        else let n' = read . C.unpack $ n in                                           
+                                             do dat <- if C.length cur >= n'
+                                                         then return cur
+                                                         else do ex <- recvTill sock (n' - C.length cur)
+                                                                 return (cur `C.append` ex)
+                                                return $ parseUrlParams' dat
                            
                      --parse :: State (C.ByteString,Request) ()
                      parse' str rq = let Done left (prq,headers) = parse R.request str
@@ -290,6 +293,8 @@ getResp = fmap _getResp get
 getReq :: ServerMonad Request 
 getReq  = fmap _getReq  get 
 
+lookupHeader k = do headers <- fmap getHeaders getReq
+                    return (M.lookup k headers)
 
 lookupParam k = do params <- fmap getParams getReq
                    return (lookup k params)
@@ -357,7 +362,7 @@ splitup fn s x = next (C.break fn x)
     where next (a,b) | b == C.empty = a:s
           next (a,b)  = splitup fn (a:s) (C.drop 1 b)
 
-a2tup y = let x = reverse y in (head x,x !! 1)
+a2tup y = let x = reverse y in if length x > 1 then (head x,x !! 1) else (head x,"")
 -- debugServer _ = return ()
 
 debug :: (Debug a) => a -> ServerMonad ()
