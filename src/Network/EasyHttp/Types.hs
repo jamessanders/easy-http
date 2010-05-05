@@ -11,6 +11,8 @@ import Network
 import Network.Socket
 import System.Posix.Files
 import Data.IORef
+import Control.Concurrent.MVar
+import Data.Dynamic
 -- Types -----------------------------------------------------
 
 data Request = Request { getReqType :: RqType
@@ -36,7 +38,11 @@ data Code = NotFound | Found | Forbidden | InternalError | MovedPermanently
 
 newtype ContentType = CT C.ByteString 
 
-data ServerState = ServerState { _getReq :: Request , _getResp :: Response }
+type SessionData = [(String,Dynamic)]
+
+data ServerState = ServerState { _getReq :: Request 
+                               , _getResp :: Response
+                               , _getSession :: MVar Int}
 type ServerMonad b = StateT ServerState IO b
 
 data ImageFile = JpegFile File | PngFile File

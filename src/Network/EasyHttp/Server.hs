@@ -17,9 +17,12 @@ module Network.EasyHttp.Server (module Network.EasyHttp.Types
                                , fileServer
                                , debug
                                , debugs
+                               , getSession
+                               , withSession
                                ) where
 
 import Control.Concurrent
+import Control.Concurrent.MVar
 import Control.Exception (bracket)
 import Control.Monad.State
 
@@ -46,6 +49,7 @@ import Text.Printf
 import System.Posix.Files
 import Data.MIME.Types
 import Data.IORef
+import Data.Dynamic
 
 import Text.Regex.Posix
 import Text.Regex.Posix.Wrap
@@ -150,7 +154,7 @@ startSocket = do
   proto <- getProtocolNumber "tcp"
   socket AF_INET Stream proto
 
-startServer addr port postconn hndl = do
+startServer addr port postconn mkstate hndl = do
   addr' <- inet_addr addr
   bracket (do sock <- startSocket
               setSocketOption sock ReuseAddr 1
@@ -161,19 +165,20 @@ startServer addr port postconn hndl = do
           (\s-> do case postconn of 
                      (Just pc) -> pc s
                      Nothing   -> return ()
+                   state <- mkstate
                    let end = Catch (putStrLn "Shutting Down Server..." >> sClose s >> exitSuccess)
                    installHandler sigTERM end Nothing
                    installHandler sigHUP  end Nothing
                    installHandler sigKILL end Nothing
                    installHandler sigQUIT end Nothing
                    installHandler sigINT  end Nothing
-                   doAccept s)
-  where doAccept sock = do 
+                   doAccept s state)
+  where doAccept sock state = do 
           (s,sa) <- accept sock
-          forkOS (hdlRequest s sa)
-          doAccept sock
-        hdlRequest s sa =
-            do a <- hndl s sa (hdlRequest s sa)
+          forkIO (hdlRequest s sa state)
+          doAccept sock state
+        hdlRequest s sa state =
+            do a <- hndl s sa state (hdlRequest s sa state)
                catch (a s) print >> sClose s
                return ()
 
@@ -184,19 +189,23 @@ startHTTP' :: String                 -- Host
           -> Maybe (Socket -> IO ()) -- Post connect callback
           -> ServerMonad ()          -- Request handler
           -> IO () 
-startHTTP' addr port pc = startServer addr port pc . httpService 
-    where httpService f sock sa next = 
+startHTTP' addr port pc d = do let st = (print "CREATE MVAR" >> newMVar 0)
+                               startServer addr port pc st (httpService d)
+    where httpService f sock sa m next = 
             withHeaders sa $ \hds-> do 
               debugServer (getReqPath hds)
-              rsp <- fmap _getResp (runHttpHandler hds)
+              hndl <- runHttpHandler m hds
+              let rsp  = _getResp hndl
+              let mvar = _getSession hndl
+              readMVar mvar >>= print
               let conn = fromMaybe "Keep-Alive" (M.lookup "Connection" $ getReqHeaders hds)
               if conn == "close"
                  then return (\s->serve (putHeaders rsp $ M.insert "Connection" "close" (getHeaders rsp)) s >> sClose s)
                  else return (\s->serve (putHeaders rsp $ M.insert "Connection" "keep-alive" (getHeaders rsp) ) s >> next)
           
-           where runHttpHandler hds =
-                   catch (execStateT f (ServerState hds emptyResponse ))
-                         (\e->return $ ServerState hds (resp500 (C.pack . show $ e)) )
+           where runHttpHandler m hds =
+                   catch (execStateT f (ServerState hds emptyResponse m))
+                         (\e->return $ ServerState hds (resp500 (C.pack . show $ e)) m)
 
                  withHeaders sockAddr next = do
                    h  <- readTillEnd ""
@@ -370,3 +379,17 @@ debug = lift . debugServer . debugShow
 
 debugs :: String -> ServerMonad ()
 debugs = debug
+
+
+------------------------------------------------------------------------
+-- Sessions
+------------------------------------------------------------------------
+
+getSession :: ServerMonad Int
+getSession = do m <- fmap _getSession get
+                x <- liftIO $ readMVar m
+                return x
+withSession f = do st <- get
+                   let session = _getSession st
+                   x <- liftIO $ modifyMVar_ session f
+                   return x
