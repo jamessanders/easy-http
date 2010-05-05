@@ -154,7 +154,7 @@ startSocket = do
   proto <- getProtocolNumber "tcp"
   socket AF_INET Stream proto
 
-startServer addr port postconn mkstate hndl = do
+startServer addr port postconn hndl = do
   addr' <- inet_addr addr
   bracket (do sock <- startSocket
               setSocketOption sock ReuseAddr 1
@@ -165,20 +165,19 @@ startServer addr port postconn mkstate hndl = do
           (\s-> do case postconn of 
                      (Just pc) -> pc s
                      Nothing   -> return ()
-                   state <- mkstate
                    let end = Catch (putStrLn "Shutting Down Server..." >> sClose s >> exitSuccess)
                    installHandler sigTERM end Nothing
                    installHandler sigHUP  end Nothing
                    installHandler sigKILL end Nothing
                    installHandler sigQUIT end Nothing
                    installHandler sigINT  end Nothing
-                   doAccept s state)
-  where doAccept sock state = do 
+                   doAccept s )
+  where doAccept sock = do 
           (s,sa) <- accept sock
-          forkIO (hdlRequest s sa state)
-          doAccept sock state
-        hdlRequest s sa state =
-            do a <- hndl s sa state (hdlRequest s sa state)
+          forkIO (hdlRequest s sa)
+          doAccept sock 
+        hdlRequest s sa  =
+            do a <- hndl s sa (hdlRequest s sa)
                catch (a s) print >> sClose s
                return ()
 
@@ -189,9 +188,9 @@ startHTTP' :: String                 -- Host
           -> Maybe (Socket -> IO ()) -- Post connect callback
           -> ServerMonad ()          -- Request handler
           -> IO () 
-startHTTP' addr port pc d = do let st = (print "CREATE MVAR" >> newMVar 0)
-                               startServer addr port pc st (httpService d)
-    where httpService f sock sa m next = 
+startHTTP' addr port pc d = do m <- newMVar 0
+                               startServer addr port pc (httpService m d)
+    where httpService m f sock sa next = 
             withHeaders sa $ \hds-> do 
               debugServer (getReqPath hds)
               hndl <- runHttpHandler m hds
