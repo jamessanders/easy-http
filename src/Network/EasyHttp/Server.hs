@@ -17,8 +17,10 @@ module Network.EasyHttp.Server (module Network.EasyHttp.Types
                                , fileServer
                                , debug
                                , debugs
-                               , getSession
-                               , withSession
+                               , putHeader
+                               , createSession
+                               , fromSession
+                               , updateSession
                                ) where
 
 import Control.Concurrent
@@ -50,6 +52,7 @@ import System.Posix.Files
 import Data.MIME.Types
 import Data.IORef
 import Data.Dynamic
+import Data.Hash.MD5
 
 import Text.Regex.Posix
 import Text.Regex.Posix.Wrap
@@ -188,15 +191,13 @@ startHTTP' :: String                 -- Host
           -> Maybe (Socket -> IO ()) -- Post connect callback
           -> ServerMonad ()          -- Request handler
           -> IO () 
-startHTTP' addr port pc d = do m <- newMVar 0
+startHTTP' addr port pc d = do m <- newMVar []
                                startServer addr port pc (httpService m d)
     where httpService m f sock sa next = 
             withHeaders sa $ \hds-> do 
               debugServer (getReqPath hds)
               hndl <- runHttpHandler m hds
               let rsp  = _getResp hndl
-              let mvar = _getSession hndl
-              readMVar mvar >>= print
               let conn = fromMaybe "Keep-Alive" (M.lookup "Connection" $ getReqHeaders hds)
               if conn == "close"
                  then return (\s->serve (putHeaders rsp $ M.insert "Connection" "close" (getHeaders rsp)) s >> sClose s)
@@ -242,9 +243,11 @@ startHTTP' addr port pc d = do m <- newMVar 0
                      --parse :: State (C.ByteString,Request) ()
                      parse' str rq = let Done left (prq,headers) = parse R.request str
                                          (rp,rg) = C.break (== '?') (R.requestUri prq)
+                                         headers'= M.fromList (map simHeaders headers)
                                     in (left,rq { getReqType    = toRqType (R.requestMethod prq)
                                                 , getReqPath    = rp
-                                                , getReqHeaders = M.fromList (map simHeaders headers)
+                                                , getReqHeaders = headers'
+                                                , getCookies = parseMyCookies headers'
                                                 , getParams  = parseUrlParams rg
                                                 }) --TODO FIX THIS
 
@@ -253,6 +256,10 @@ startHTTP' addr port pc d = do m <- newMVar 0
                                 | x == "HEAD" = HEAD
                      toRqType x = undefined
                      simHeaders (R.Header a b) = (a,head b)
+
+                     parseMyCookies h = case M.lookup "Cookie" h of
+                                          Just a  -> parseCookies a
+                                          Nothing -> []
 
                      parseUrlParams s = let x = C.dropWhile (/= '?') s in 
                                         if C.null x then [] else parseUrlParams' $ C.tail x
@@ -263,7 +270,7 @@ startHTTP' addr port pc d = do m <- newMVar 0
 
 ------------------------------------------------------------------------
 
-emptyRequest = Request GET "/" (M.fromList []) []
+emptyRequest = Request GET "/" (M.fromList []) [] []
 
 toHeaders = map (uncurry Header) . M.toList
 
@@ -371,6 +378,14 @@ splitup fn s x = next (C.break fn x)
           next (a,b)  = splitup fn (a:s) (C.drop 1 b)
 
 a2tup y = let x = reverse y in if length x > 1 then (head x,x !! 1) else (head x,"")
+
+parseCookies x = map parseLine $ C.split ';' x
+    where parseLine = fix . C.break (== '=') 
+          fix (a,b) = (strip a,strip $ C.tail b)
+
+triml = C.dropWhile isSpace
+trimr = C.reverse . triml . C.reverse
+strip = triml . trimr
 -- debugServer _ = return ()
 
 debug :: (Debug a) => a -> ServerMonad ()
@@ -384,11 +399,44 @@ debugs = debug
 -- Sessions
 ------------------------------------------------------------------------
 
-getSession :: ServerMonad Int
-getSession = do m <- fmap _getSession get
-                x <- liftIO $ readMVar m
-                return x
-withSession f = do st <- get
-                   let session = _getSession st
-                   x <- liftIO $ modifyMVar_ session f
-                   return x
+getSessionHash = do cookies <- fmap getCookies getReq
+                    return $ lookup "esession" cookies
+
+createSession = do req <- getReq
+                   m <- fmap _getSession get
+                   ses <- liftIO $ readMVar m
+                   case lookup "esession" (getCookies req) of
+                      Just a  -> case lookup a ses of 
+                                   Just a -> return ()
+                                   Nothing -> mkSession req m
+                      Nothing -> mkSession req m
+                 where mkSession req m = do
+                        now <- liftIO $ getCurrentTime
+                        let ca = show $ getClientAddr req
+                        let hash = md5s (Str $ (show now) ++ (show ca))
+                        liftIO $ modifyMVar_ m (\x-> return $ (C.pack hash,[]) : x)
+                        putHeader "Set-Cookie" ("esession=" `C.append` C.pack hash)
+
+modifyAtKey k f ls = map (\(a,v) -> if k == a then (a,f v) else (a,v)) ls
+                     
+
+fromSession k = do hash <- getSessionHash
+                   case hash of
+                     Just h -> do m   <- fmap _getSession get
+                                  ses <- liftIO $ readMVar m
+                                  return . join . fmap (join . fmap fromDynamic . lookup k) $ lookup h ses
+                     Nothing -> return Nothing
+                   
+updateSession k v = do createSession
+                       m   <- fmap _getSession get
+                       ses <- liftIO $ readMVar m
+                       debug $ "Session size: " ++ show (length ses)
+                       Just hash <- getSessionHash
+                       let Just mySess = lookup hash ses
+                       let nsess = case lookup k mySess of
+                                     Just a -> modifyAtKey k (const $ toDyn v) mySess
+                                     Nothing-> (k,toDyn v) : mySess
+                       liftIO $ modifyMVar_ m (\s-> return $ modifyAtKey hash (const nsess) s)
+                       return ()
+                     
+

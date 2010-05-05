@@ -18,6 +18,7 @@ import Data.Dynamic
 data Request = Request { getReqType :: RqType
                        , getReqPath :: RqPath 
                        , getReqHeaders :: Headers
+                       , getCookies :: [(C.ByteString,C.ByteString)]
                        , getParams :: [(C.ByteString,C.ByteString)]
                        , getClientAddr :: SockAddr } deriving (Show) 
 
@@ -42,7 +43,7 @@ type SessionData = [(String,Dynamic)]
 
 data ServerState = ServerState { _getReq :: Request 
                                , _getResp :: Response
-                               , _getSession :: MVar Int}
+                               , _getSession :: MVar [(C.ByteString,SessionData)]}
 type ServerMonad b = StateT ServerState IO b
 
 data ImageFile = JpegFile File | PngFile File
