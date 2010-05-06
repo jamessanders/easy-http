@@ -206,7 +206,7 @@ startHTTP' addr port pc d = do m <- newMVar []
               debugServer (getReqPath hds)
               hndl <- runHttpHandler m hds
               let rsp  = _getResp hndl
-              let conn = fromMaybe "Keep-Alive" (M.lookup "Connection" $ getReqHeaders hds)
+              let conn = fromMaybe "Keep-Alive" (M.lookup "connection" $ getReqHeaders hds)
               if conn == "close"
                  then return (\s->serve (putHeaders rsp $ M.insert "Connection" "close" (getHeaders rsp)) s >> sClose s)
                  else return (\s->serve (putHeaders rsp $ M.insert "Connection" "keep-alive" (getHeaders rsp) ) s >> next)
@@ -236,7 +236,7 @@ startHTTP' addr port pc d = do m <- newMVar []
                                           || C.isInfixOf "\r\r" i
 
                      readPost rq cur = 
-                         case M.lookup "Content-Length" $ getReqHeaders rq of
+                         case M.lookup "content-length" $ getReqHeaders rq of
                            Nothing -> return []
                            Just n  -> if n == "0" 
                                         then return []
@@ -263,9 +263,9 @@ startHTTP' addr port pc d = do m <- newMVar []
                                 | x == "POST" = POST
                                 | x == "HEAD" = HEAD
                      toRqType x = undefined
-                     simHeaders (R.Header a b) = (a,head b)
+                     simHeaders (R.Header a b) = (C.map toLower a,head b)
 
-                     parseMyCookies h = case M.lookup "Cookie" h of
+                     parseMyCookies h = case M.lookup "cookie" h of
                                           Just a  -> parseCookies a
                                           Nothing -> []
 
