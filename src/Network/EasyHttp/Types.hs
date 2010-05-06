@@ -43,7 +43,8 @@ newtype ContentType = CT C.ByteString
 
 
 type SessionData = [(C.ByteString,SessionRecord)]
-type SessionRecord = (UTCTime,[(C.ByteString,Dynamic)])
+type SessionStore = [(C.ByteString,Dynamic)]
+type SessionRecord = (UTCTime,SessionStore)
 makeSessionRecord e r = (e,r) :: SessionRecord
 getSessionExpireDate (e,_) = e
 getSessionValue      (_,r) = r
