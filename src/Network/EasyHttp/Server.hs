@@ -22,6 +22,8 @@ module Network.EasyHttp.Server (module Network.EasyHttp.Types
                                , fromSession
                                , updateSession
                                , deleteSession
+                               , getSessionData
+                               , lookupSD
                                ) where
 
 import Control.Concurrent
@@ -31,14 +33,17 @@ import Control.Monad.State
 
 import Data.Attoparsec.Char8 
 import Data.Char
+import Data.Dynamic
+import Data.Hash.MD5
+import Data.IORef
 import Data.List
+import Data.MIME.Types
 import Data.Maybe
 import Data.Time
 
-import Network.EasyHttp.Types
-
-import Network.Socket
 import Network.BSD
+import Network.EasyHttp.Types
+import Network.Socket
 import Network.Socket.SendFile
 import Network.URI (unEscapeString)
 
@@ -46,16 +51,11 @@ import System.Directory
 import System.Exit
 import System.FilePath
 import System.IO
-import System.Posix.Signals
 import System.Locale
+import System.Posix.Files
+import System.Posix.Signals
 
 import Text.Printf
-import System.Posix.Files
-import Data.MIME.Types
-import Data.IORef
-import Data.Dynamic
-import Data.Hash.MD5
-
 import Text.Regex.Posix
 import Text.Regex.Posix.Wrap
 
@@ -436,19 +436,23 @@ createSession = do req  <- getReq
 modifyAtKey k f ls = map (\(a,v) -> if k == a then (a,f v) else (a,v)) ls
                      
 
-fromSession k = do hash <- getSessionHash
-                   case hash of
-                     Just h -> do m   <- fmap _getSession get
-                                  ses <- liftIO $ readMVar m
-                                  return . join . fmap (join . fmap fromDynamic  . lookup k . getSessionValue)  $ lookup h ses
-                     Nothing -> return Nothing
-                   
+fromSession k = do sd <- getSessionData
+                   return . join . fmap (lookupSD k) $ sd
+
+
+lookupSD k = join . fmap fromDynamic  . lookup k 
+
+getSessionData = do hash <- getSessionHash
+                    case hash of
+                      Just h -> do m   <- fmap _getSession get
+                                   ses <- liftIO $ readMVar m
+                                   return . fmap getSessionValue . lookup h $ ses
+                      Nothing -> return Nothing
+
 updateSession k v = do createSession
                        now <- liftIO $ getCurrentTime
                        m   <- fmap _getSession get
                        ses <- liftIO $ readMVar m
-                       --debug $ "Session size: " ++ show (length ses)
-                       --debug $ "Session: " ++ show ses
                        Just hash <- getSessionHash
                        let Just mySess = fmap getSessionValue $ lookup hash ses
                        let nsess = case lookup k mySess of
