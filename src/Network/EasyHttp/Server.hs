@@ -320,7 +320,8 @@ modifyReq f = do s <- get
                  put $ s { _getReq = f (_getReq s) }
 
 lookupHeader k = do headers <- fmap getHeaders getReq
-                    return (M.lookup k headers)
+                    let k' = C.map toLower k
+                    return (M.lookup k' headers)
 
 lookupParam k = do params <- fmap getParams getReq
                    return (lookup k params)
