@@ -157,6 +157,7 @@ redirect a = putCode MovedPermanently
              >> putHeader "Cache-Control" "no-cache"
              >> putHeader "Location" a 
              >> putBody (C.empty)
+
 -- Server -----------------------------------------------------------
 
 startSocket = do
