@@ -464,7 +464,7 @@ updateSession k v = do createSession
 deleteSession = do hash <- getSessionHash
                    m   <- fmap _getSession get
                    case hash of
-                     Just h -> liftIO $ modifyMVar_ m (return . filter ((== h) . fst))
+                     Just h -> liftIO $ modifyMVar_ m (return . filter ((/= h) . fst))
                      Nothing-> return ()
 
 sessionGC m = do now <- getCurrentTime
