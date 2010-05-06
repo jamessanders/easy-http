@@ -152,7 +152,10 @@ sendfile fp = do
 ok a = putCode Found >> putBody a
 serverFail a = putCode InternalError >> putBody a
 notFound = putResp resp404
-redirect a = putCode MovedPermanently >> putHeader "Location" a
+redirect a = putCode MovedPermanently 
+             >> putHeader "Cache-Control" "no-cache"
+             >> putHeader "Location" a 
+             >> putBody (C.empty)
 -- Server -----------------------------------------------------------
 
 startSocket = do
