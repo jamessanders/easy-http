@@ -13,12 +13,14 @@ import System.Posix.Files
 import Data.IORef
 import Control.Concurrent.MVar
 import Data.Dynamic
+import Data.Time
 -- Types -----------------------------------------------------
 
 data Request = Request { getReqType :: RqType
                        , getReqPath :: RqPath 
                        , getReqHeaders :: Headers
                        , getCookies :: [(C.ByteString,C.ByteString)]
+                       , getReqSessionHash :: Maybe C.ByteString
                        , getParams :: [(C.ByteString,C.ByteString)]
                        , getClientAddr :: SockAddr } deriving (Show) 
 
@@ -39,11 +41,19 @@ data Code = NotFound | Found | Forbidden | InternalError | MovedPermanently
 
 newtype ContentType = CT C.ByteString 
 
-type SessionData = [(String,Dynamic)]
+
+type SessionData = [(C.ByteString,SessionRecord)]
+type SessionRecord = (UTCTime,[(C.ByteString,Dynamic)])
+makeSessionRecord e r = (e,r) :: SessionRecord
+getSessionExpireDate (e,_) = e
+getSessionValue      (_,r) = r
+setSessionExpireDate (_,r) d = (d,r)
+setSessionValue      (e,_) r = (e,r)
+
 
 data ServerState = ServerState { _getReq :: Request 
                                , _getResp :: Response
-                               , _getSession :: MVar [(C.ByteString,SessionData)]}
+                               , _getSession :: MVar SessionData }
 type ServerMonad b = StateT ServerState IO b
 
 data ImageFile = JpegFile File | PngFile File

@@ -21,6 +21,7 @@ module Network.EasyHttp.Server (module Network.EasyHttp.Types
                                , createSession
                                , fromSession
                                , updateSession
+                               , deleteSession
                                ) where
 
 import Control.Concurrent
@@ -46,6 +47,7 @@ import System.Exit
 import System.FilePath
 import System.IO
 import System.Posix.Signals
+import System.Locale
 
 import Text.Printf
 import System.Posix.Files
@@ -192,6 +194,7 @@ startHTTP' :: String                 -- Host
           -> ServerMonad ()          -- Request handler
           -> IO () 
 startHTTP' addr port pc d = do m <- newMVar []
+                               forkIO $ runSessionGC m
                                startServer addr port pc (httpService m d)
     where httpService m f sock sa next = 
             withHeaders sa $ \hds-> do 
@@ -213,7 +216,6 @@ startHTTP' addr port pc d = do m <- newMVar []
                      then return sClose
                      else do let (leftovers,request) = parse' h (emptyRequest sockAddr)
                              post <- readPost request leftovers 
-                             print post
                              next (request { getParams = getParams request ++ post })
                    where 
                      readTillEnd x = do i <- catch (NB.recv sock 8192) (\_->return "")
@@ -248,6 +250,7 @@ startHTTP' addr port pc d = do m <- newMVar []
                                                 , getReqPath    = rp
                                                 , getReqHeaders = headers'
                                                 , getCookies = parseMyCookies headers'
+                                                , getReqSessionHash = Nothing
                                                 , getParams  = parseUrlParams rg
                                                 }) --TODO FIX THIS
 
@@ -270,7 +273,7 @@ startHTTP' addr port pc d = do m <- newMVar []
 
 ------------------------------------------------------------------------
 
-emptyRequest = Request GET "/" (M.fromList []) [] []
+emptyRequest = Request GET "/" (M.fromList []) [] Nothing []
 
 toHeaders = map (uncurry Header) . M.toList
 
@@ -308,6 +311,9 @@ getResp = fmap _getResp get
 getReq :: ServerMonad Request 
 getReq  = fmap _getReq  get 
 
+modifyReq f = do s <- get
+                 put $ s { _getReq = f (_getReq s) }
+
 lookupHeader k = do headers <- fmap getHeaders getReq
                     return (M.lookup k headers)
 
@@ -342,7 +348,7 @@ fileServer :: String -> FilePath -> ServerMonad ()
 fileServer uri path = do
   rq <- fmap (C.unpack . getReqPath) getReq
   let fp = makeRelative uri rq
-  debug (path </> fp)
+  --debug (path </> fp)
   sendfile (path </> fp)
 
 -- Utils -------------------------------------------------------
@@ -399,23 +405,33 @@ debugs = debug
 -- Sessions
 ------------------------------------------------------------------------
 
-getSessionHash = do cookies <- fmap getCookies getReq
-                    return $ lookup "esession" cookies
+getSessionHash = do 
+  req <- getReq
+  case getReqSessionHash req of
+    Just a -> return $ Just a
+    Nothing-> return $ lookup "esession" (getCookies req)
 
-createSession = do req <- getReq
-                   m <- fmap _getSession get
-                   ses <- liftIO $ readMVar m
-                   case lookup "esession" (getCookies req) of
+expiresIn = addUTCTime (fromIntegral $ 24 * 3600)
+
+expStr = C.pack . formatTime defaultTimeLocale "%a, %d-%b-%C%y %X GMT" 
+
+createSession = do req  <- getReq
+                   m    <- fmap _getSession get
+                   ses  <- liftIO $ readMVar m
+                   hash <- getSessionHash
+                   case hash of
                       Just a  -> case lookup a ses of 
-                                   Just a -> return ()
+                                   Just a  -> return ()
                                    Nothing -> mkSession req m
                       Nothing -> mkSession req m
                  where mkSession req m = do
                         now <- liftIO $ getCurrentTime
+                        let expires = expiresIn now
                         let ca = show $ getClientAddr req
-                        let hash = md5s (Str $ (show now) ++ (show ca))
-                        liftIO $ modifyMVar_ m (\x-> return $ (C.pack hash,[]) : x)
-                        putHeader "Set-Cookie" ("esession=" `C.append` C.pack hash)
+                        let hash = C.pack $ md5s (Str $ (show now) ++ (show ca))
+                        liftIO $ modifyMVar_ m (\x-> return $ x ++ [(hash,makeSessionRecord expires [])])
+                        putHeader "Set-Cookie" ("esession=" `C.append` hash `C.append` "; expires=" `C.append` expStr expires)
+                        modifyReq (\rq-> rq { getReqSessionHash = Just hash })
 
 modifyAtKey k f ls = map (\(a,v) -> if k == a then (a,f v) else (a,v)) ls
                      
@@ -424,19 +440,32 @@ fromSession k = do hash <- getSessionHash
                    case hash of
                      Just h -> do m   <- fmap _getSession get
                                   ses <- liftIO $ readMVar m
-                                  return . join . fmap (join . fmap fromDynamic . lookup k) $ lookup h ses
+                                  return . join . fmap (join . fmap fromDynamic  . lookup k . getSessionValue)  $ lookup h ses
                      Nothing -> return Nothing
                    
 updateSession k v = do createSession
+                       now <- liftIO $ getCurrentTime
                        m   <- fmap _getSession get
                        ses <- liftIO $ readMVar m
-                       debug $ "Session size: " ++ show (length ses)
+                       --debug $ "Session size: " ++ show (length ses)
+                       --debug $ "Session: " ++ show ses
                        Just hash <- getSessionHash
-                       let Just mySess = lookup hash ses
+                       let Just mySess = fmap getSessionValue $ lookup hash ses
                        let nsess = case lookup k mySess of
                                      Just a -> modifyAtKey k (const $ toDyn v) mySess
                                      Nothing-> (k,toDyn v) : mySess
-                       liftIO $ modifyMVar_ m (\s-> return $ modifyAtKey hash (const nsess) s)
+                       liftIO $ modifyMVar_ m (\s-> return $ modifyAtKey hash (const $ makeSessionRecord (expiresIn now) nsess) s)
                        return ()
                      
+deleteSession = do hash <- getSessionHash
+                   m   <- fmap _getSession get
+                   case hash of
+                     Just h -> liftIO $ modifyMVar_ m (return . filter ((== h) . fst))
+                     Nothing-> return ()
 
+sessionGC m = do now <- getCurrentTime
+                 liftIO $ modifyMVar_ m (return . filter ((> now) . getSessionExpireDate . snd))
+
+runSessionGC m = do sessionGC m
+                    threadDelay ( 60 * 1000000 )
+                    runSessionGC m
