@@ -37,7 +37,12 @@ getRespHeaders (Response _ h _) = h
 getRespCode    (Response c _ _) = c                
 
 
-data Code = NotFound | Found | Forbidden | InternalError | MovedPermanently
+data Code = NotFound 
+          | Found 
+          | Forbidden 
+          | InternalError 
+          | MovedPermanently 
+          | TempRedirect
 
 newtype ContentType = CT C.ByteString 
 
@@ -90,6 +95,7 @@ instance Show Code where
     show Forbidden = "403 Forbidden"
     show InternalError = "500 Internal Error"
     show MovedPermanently = "301 Moved Permanently"
+    show TempRedirect = "307 Temporary Redirect"
                          
 instance Show Header where
     show (Header a b) = C.unpack c

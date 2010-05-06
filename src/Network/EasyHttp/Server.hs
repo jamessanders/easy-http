@@ -146,10 +146,11 @@ fromFilePath fp = do fs   <- lift $ getFileStatus fp
 
 sendfile fp = do
   exist <- lift $ doesFileExist fp
-  if exist then fromFilePath fp >>= ok
+  if exist then fromFilePath fp >>= ok'
            else putResp resp404
 
-ok a = putCode Found >> putBody a
+ok' a = putCode Found >> putBody a
+ok a = putCode Found >> putBody a >> putHeader "Cache-Control" "no-cache"
 serverFail a = putCode InternalError >> putBody a
 notFound = putResp resp404
 redirect a = putCode MovedPermanently 
