@@ -11,12 +11,17 @@ import Network
 import Network.Socket
 import System.Posix.Files
 import Data.IORef
+import Control.Concurrent.MVar
+import Data.Dynamic
+import Data.Time
 -- Types -----------------------------------------------------
 
 data Request = Request { getReqType :: RqType
                        , getReqPath :: RqPath 
                        , getReqHeaders :: Headers
-                       , getGetParams :: [(C.ByteString,C.ByteString)]
+                       , getCookies :: [(C.ByteString,C.ByteString)]
+                       , getReqSessionHash :: Maybe C.ByteString
+                       , getParams :: [(C.ByteString,C.ByteString)]
                        , getClientAddr :: SockAddr } deriving (Show) 
 
 data Header  = Header C.ByteString C.ByteString
@@ -36,7 +41,20 @@ data Code = NotFound | Found | Forbidden | InternalError | MovedPermanently
 
 newtype ContentType = CT C.ByteString 
 
-data ServerState = ServerState { _getReq :: Request , _getResp :: Response }
+
+type SessionData = [(C.ByteString,SessionRecord)]
+type SessionStore = [(C.ByteString,Dynamic)]
+type SessionRecord = (UTCTime,SessionStore)
+makeSessionRecord e r = (e,r) :: SessionRecord
+getSessionExpireDate (e,_) = e
+getSessionValue      (_,r) = r
+setSessionExpireDate (_,r) d = (d,r)
+setSessionValue      (e,_) r = (e,r)
+
+
+data ServerState = ServerState { _getReq :: Request 
+                               , _getResp :: Response
+                               , _getSession :: MVar SessionData }
 type ServerMonad b = StateT ServerState IO b
 
 data ImageFile = JpegFile File | PngFile File

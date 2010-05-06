@@ -8,38 +8,54 @@ module Network.EasyHttp.Server (module Network.EasyHttp.Types
                                , startHTTP
                                , startHTTP'
                                , getReq
+                               , getParams
+                               , lookupHeader
+                               , lookupParam
+                               , lookupParam'
                                , limitClients
                                , dispatch
                                , fileServer
                                , debug
                                , debugs
+                               , putHeader
+                               , createSession
+                               , fromSession
+                               , updateSession
+                               , deleteSession
+                               , getSessionData
+                               , lookupSD
                                ) where
 
 import Control.Concurrent
+import Control.Concurrent.MVar
 import Control.Exception (bracket)
 import Control.Monad.State
 
 import Data.Attoparsec.Char8 
 import Data.Char
+import Data.Dynamic
+import Data.Hash.MD5
+import Data.IORef
 import Data.List
+import Data.MIME.Types
 import Data.Maybe
 import Data.Time
 
-import Network.EasyHttp.Types
-
-import Network.Socket
 import Network.BSD
+import Network.EasyHttp.Types
+import Network.Socket
 import Network.Socket.SendFile
+import Network.URI (unEscapeString)
 
 import System.Directory
+import System.Exit
 import System.FilePath
 import System.IO
+import System.Locale
+import System.Posix.Files
+import System.Posix.Signals
 
 import Text.Printf
-import System.Posix.Files
-import Data.MIME.Types
-import Data.IORef
-
 import Text.Regex.Posix
 import Text.Regex.Posix.Wrap
 
@@ -76,15 +92,15 @@ instance Servable File where
     serve (File fp _ _) s = sendFile s fp
 
 instance Servable SC where
-    serve (SC a) s = serve a s
+    serve (SC a) = serve a
  
 instance Servable a => Servable (HTML a) where
-    serve (HTML a) s = serve a s
+    serve (HTML a) = serve a
 
 instance Servable Response where
     serve (Response c h b) s = do 
-      let a  = ["HTTP/1.1 ",(showbs c),"\r\n"]
-      let ct = ((showbs) 
+      let a  = ["HTTP/1.1 ",showbs c,"\r\n"]
+      let ct = (showbs 
                 (fromMaybe (CT "text/plain") 
                 (getContentType b)))  
       let cl = getContentLength b 
@@ -112,8 +128,8 @@ instance HttpContent C.ByteString where
 
 instance HttpContent File where
     getContentType   f = let a = getMimeType f in Just (CT a)
-    getContentLength f = sizeFromFp f
-    getContent       f = SC f
+    getContentLength   = sizeFromFp 
+    getContent         = SC 
 
 instance HttpContent ImageData where
     getContentType _   = Just (CT "image/jpeg")
@@ -131,14 +147,16 @@ fromFilePath fp = do fs   <- lift $ getFileStatus fp
 sendfile fp = do
   exist <- lift $ doesFileExist fp
   if exist then fromFilePath fp >>= ok
-           else putResp (resp404)
+           else putResp resp404
 
 ok a = putCode Found >> putBody a
 serverFail a = putCode InternalError >> putBody a
-notFound     = putResp resp404
-redirect a   = putCode MovedPermanently 
-               >> putHeader "Location" a 
-               >> putBody ("Redirected to " `C.append` a)
+notFound = putResp resp404
+redirect a = putCode MovedPermanently 
+             >> putHeader "Cache-Control" "no-cache"
+             >> putHeader "Location" a 
+             >> putBody (C.empty)
+
 -- Server -----------------------------------------------------------
 
 startSocket = do
@@ -149,72 +167,95 @@ startServer addr port postconn hndl = do
   addr' <- inet_addr addr
   bracket (do sock <- startSocket
               setSocketOption sock ReuseAddr 1
-              bindSocket sock (SockAddrInet (fromInteger port) (addr'))
+              bindSocket sock (SockAddrInet (fromInteger port) addr')
               listen sock maxListenQueue
               return sock)
-          (\s-> N.sClose s)
+          N.sClose
           (\s-> do case postconn of 
                      (Just pc) -> pc s
                      Nothing   -> return ()
-                   doAccept s)
+                   let end = Catch (putStrLn "Shutting Down Server..." >> sClose s >> exitSuccess)
+                   installHandler sigTERM end Nothing
+                   installHandler sigHUP  end Nothing
+                   installHandler sigKILL end Nothing
+                   installHandler sigQUIT end Nothing
+                   installHandler sigINT  end Nothing
+                   doAccept s )
   where doAccept sock = do 
           (s,sa) <- accept sock
           forkIO (hdlRequest s sa)
-          doAccept sock
-        hdlRequest s sa =
+          doAccept sock 
+        hdlRequest s sa  =
             do a <- hndl s sa (hdlRequest s sa)
-               catch (a s) (\e->putStrLn (show e) >> sClose s)
+               catch (a s) print >> sClose s
                return ()
 
-startHTTP addr port hdl = startHTTP' addr port Nothing hdl
+startHTTP addr port = startHTTP' addr port Nothing
 
-startHTTP' :: String                  -- Host
+startHTTP' :: String                 -- Host
           -> Integer                 -- Port
           -> Maybe (Socket -> IO ()) -- Post connect callback
           -> ServerMonad ()          -- Request handler
           -> IO () 
-startHTTP' addr port pc = startServer addr port pc . httpService 
-    where httpService f sock sa next = 
+startHTTP' addr port pc d = do m <- newMVar []
+                               forkIO $ runSessionGC m
+                               startServer addr port pc (httpService m d)
+    where httpService m f sock sa next = 
             withHeaders sa $ \hds-> do 
               debugServer (getReqPath hds)
-              rsp <- fmap _getResp (runHttpHandler hds)
+              hndl <- runHttpHandler m hds
+              let rsp  = _getResp hndl
               let conn = fromMaybe "Keep-Alive" (M.lookup "Connection" $ getReqHeaders hds)
               if conn == "close"
-                 then return $ (\s->serve (putHeaders rsp $ M.insert "Connection" "close" (getHeaders rsp)) s >> sClose s)
-                 else return $ (\s->serve (putHeaders rsp $ M.insert "Connection" "keep-alive" (getHeaders rsp) ) s >> next)
+                 then return (\s->serve (putHeaders rsp $ M.insert "Connection" "close" (getHeaders rsp)) s >> sClose s)
+                 else return (\s->serve (putHeaders rsp $ M.insert "Connection" "keep-alive" (getHeaders rsp) ) s >> next)
           
-           where runHttpHandler hds = do 
-                   catch (execStateT f (ServerState hds emptyResponse ))
-                         (\e->return $ ServerState hds (resp500 (C.pack . show $ e)) )
+           where runHttpHandler m hds =
+                   catch (execStateT f (ServerState hds emptyResponse m))
+                         (\e->return $ ServerState hds (resp500 (C.pack . show $ e)) m)
 
                  withHeaders sockAddr next = do
                    h  <- readTillEnd ""
-                   if C.length h == 0 
+                   if C.null h 
                      then return sClose
                      else do let (leftovers,request) = parse' h (emptyRequest sockAddr)
-                             --print leftovers
-                             --print request
-                             next  request
+                             post <- readPost request leftovers 
+                             next (request { getParams = getParams request ++ post })
                    where 
                      readTillEnd x = do i <- catch (NB.recv sock 8192) (\_->return "")
-                                        if C.length i == 0
+                                        if C.null i
                                           then return ""
                                           else do
                                             let j = (C.append x i)
                                             if C.null i || hasEnd j
                                               then return j
-                                              else print i >> readTillEnd j
+                                              else readTillEnd j
                          where hasEnd i = C.isInfixOf "\n\n" i
                                           || C.isInfixOf "\r\n\r\n" i
                                           || C.isInfixOf "\r\r" i
 
+                     readPost rq cur = 
+                         case M.lookup "Content-Length" $ getReqHeaders rq of
+                           Nothing -> return []
+                           Just n  -> if n == "0" 
+                                        then return []
+                                        else let n' = read . C.unpack $ n in                                           
+                                             do dat <- if C.length cur >= n'
+                                                         then return cur
+                                                         else do ex <- recvTill sock (n' - C.length cur)
+                                                                 return (cur `C.append` ex)
+                                                return $ parseUrlParams' dat
+                           
                      --parse :: State (C.ByteString,Request) ()
                      parse' str rq = let Done left (prq,headers) = parse R.request str
                                          (rp,rg) = C.break (== '?') (R.requestUri prq)
+                                         headers'= M.fromList (map simHeaders headers)
                                     in (left,rq { getReqType    = toRqType (R.requestMethod prq)
                                                 , getReqPath    = rp
-                                                , getReqHeaders = M.fromList (map simHeaders headers)
-                                                , getGetParams  = parseUrlParams rg
+                                                , getReqHeaders = headers'
+                                                , getCookies = parseMyCookies headers'
+                                                , getReqSessionHash = Nothing
+                                                , getParams  = parseUrlParams rg
                                                 }) --TODO FIX THIS
 
                      toRqType x | x == "GET"  = GET
@@ -223,18 +264,22 @@ startHTTP' addr port pc = startServer addr port pc . httpService
                      toRqType x = undefined
                      simHeaders (R.Header a b) = (a,head b)
 
-                     parseUrlParams s = let x = C.dropWhile (/= '?') s in
-                                        if C.null x 
-                                          then [] 
-                                          else map a2tup $ 
-                                               map (splitup (== '=') []) (splitup (== '&') [] (C.tail x)) 
+                     parseMyCookies h = case M.lookup "Cookie" h of
+                                          Just a  -> parseCookies a
+                                          Nothing -> []
 
+                     parseUrlParams s = let x = C.dropWhile (/= '?') s in 
+                                        if C.null x then [] else parseUrlParams' $ C.tail x
+                     parseUrlParams' x = map (\(x,y)-> let x' = C.unpack x
+                                                           y' = C.unpack y in (C.pack $ esc x', C.pack $ esc y')) $
+                                         map (a2tup . splitup (== '=') []) (splitup (== '&') [] x) 
+                         where esc = unEscapeString . map (\x->if x == '+' then ' ' else x)
 
 ------------------------------------------------------------------------
 
-emptyRequest = Request GET "/" (M.fromList []) []
+emptyRequest = Request GET "/" (M.fromList []) [] Nothing []
 
-toHeaders = map (\(k,v)->Header k v) . M.toList
+toHeaders = map (uncurry Header) . M.toList
 
 
 
@@ -270,6 +315,20 @@ getResp = fmap _getResp get
 getReq :: ServerMonad Request 
 getReq  = fmap _getReq  get 
 
+modifyReq f = do s <- get
+                 put $ s { _getReq = f (_getReq s) }
+
+lookupHeader k = do headers <- fmap getHeaders getReq
+                    return (M.lookup k headers)
+
+lookupParam k = do params <- fmap getParams getReq
+                   return (lookup k params)
+
+lookupParam' k = do params <- fmap getParams getReq
+                    return (aux k params [])
+    where aux _ [] ls = ls
+          aux k ((a,b):xs) ls = let nls = if k == a then (b:ls) else ls
+                                 in aux k xs nls
 
 limitClients clients app = do
   rq <- getReq 
@@ -282,9 +341,9 @@ getIP (SockAddrInet pn ha) = inet_ntoa ha
 dispatch :: [(String,ServerMonad ())] -> ServerMonad ()
 dispatch urls = do
   rq <- getReq 
-  match' (getReqPath rq) (urls) >> return ()
-  where match' path (x:xs) = if path =~ (fst x)
-                              then (snd x)
+  match' (getReqPath rq) urls >> return ()
+  where match' path (x:xs) = if path =~ fst x
+                              then snd x
                               else match' path xs
         match' _ [] = putResp resp403
 
@@ -293,17 +352,22 @@ fileServer :: String -> FilePath -> ServerMonad ()
 fileServer uri path = do
   rq <- fmap (C.unpack . getReqPath) getReq
   let fp = makeRelative uri rq
-  debug (path </> fp)
+  --debug (path </> fp)
   sendfile (path </> fp)
 
 -- Utils -------------------------------------------------------
 
-isAtEOL x = (C.isPrefixOf (C.pack "\r\n") x) || (C.isPrefixOf (C.pack "\n") x)
+recvTill s n = do r <- NB.recv s n
+                  if C.length r < n then do rr <- recvTill s (n - C.length r)
+                                            return (r `C.append` rr)
+                                    else return r
+
+isAtEOL x = C.isPrefixOf (C.pack "\r\n") x || C.isPrefixOf (C.pack "\n") x
 
 lines' "" = []
 lines' x  = let bl x = x `elem` "\r\n"
                 (a,b) = C.break bl x
-            in  a:(lines' $ C.drop 1 b)
+            in  a: (lines' $ C.drop 1 b)
 
 dropTillWS = C.dropWhile (not . isSpace)
 takeTillWS = C.takeWhile (not . isSpace)
@@ -320,10 +384,18 @@ debugServer s = do
 
 splitup :: (Char -> Bool) -> [C.ByteString] -> C.ByteString -> [C.ByteString]
 splitup fn s x = next (C.break fn x)
-    where next (a,b) | b == C.empty = (a:s) 
+    where next (a,b) | b == C.empty = a:s
           next (a,b)  = splitup fn (a:s) (C.drop 1 b)
 
-a2tup y = let x = reverse y in (head x,head $ drop 1 x)
+a2tup y = let x = reverse y in if length x > 1 then (head x,x !! 1) else (head x,"")
+
+parseCookies x = map parseLine $ C.split ';' x
+    where parseLine = fix . C.break (== '=') 
+          fix (a,b) = (strip a,strip $ C.tail b)
+
+triml = C.dropWhile isSpace
+trimr = C.reverse . triml . C.reverse
+strip = triml . trimr
 -- debugServer _ = return ()
 
 debug :: (Debug a) => a -> ServerMonad ()
@@ -331,3 +403,77 @@ debug = lift . debugServer . debugShow
 
 debugs :: String -> ServerMonad ()
 debugs = debug
+
+
+------------------------------------------------------------------------
+-- Sessions
+------------------------------------------------------------------------
+
+getSessionHash = do 
+  req <- getReq
+  case getReqSessionHash req of
+    Just a -> return $ Just a
+    Nothing-> return $ lookup "esession" (getCookies req)
+
+expiresIn = addUTCTime (fromIntegral $ 24 * 3600)
+
+expStr = C.pack . formatTime defaultTimeLocale "%a, %d-%b-%C%y %X GMT" 
+
+createSession = do req  <- getReq
+                   m    <- fmap _getSession get
+                   ses  <- liftIO $ readMVar m
+                   hash <- getSessionHash
+                   case hash of
+                      Just a  -> case lookup a ses of 
+                                   Just a  -> return ()
+                                   Nothing -> mkSession req m
+                      Nothing -> mkSession req m
+                 where mkSession req m = do
+                        now <- liftIO $ getCurrentTime
+                        let expires = expiresIn now
+                        let ca = show $ getClientAddr req
+                        let hash = C.pack $ md5s (Str $ (show now) ++ (show ca))
+                        liftIO $ modifyMVar_ m (\x-> return $ x ++ [(hash,makeSessionRecord expires [])])
+                        putHeader "Set-Cookie" ("esession=" `C.append` hash `C.append` "; expires=" `C.append` expStr expires)
+                        modifyReq (\rq-> rq { getReqSessionHash = Just hash })
+
+modifyAtKey k f ls = map (\(a,v) -> if k == a then (a,f v) else (a,v)) ls
+                     
+
+fromSession k = do sd <- getSessionData
+                   return . join . fmap (lookupSD k) $ sd
+
+
+lookupSD k = join . fmap fromDynamic  . lookup k 
+
+getSessionData = do hash <- getSessionHash
+                    case hash of
+                      Just h -> do m   <- fmap _getSession get
+                                   ses <- liftIO $ readMVar m
+                                   return . fmap getSessionValue . lookup h $ ses
+                      Nothing -> return Nothing
+
+updateSession k v = do createSession
+                       now <- liftIO $ getCurrentTime
+                       m   <- fmap _getSession get
+                       ses <- liftIO $ readMVar m
+                       Just hash <- getSessionHash
+                       let Just mySess = fmap getSessionValue $ lookup hash ses
+                       let nsess = case lookup k mySess of
+                                     Just a -> modifyAtKey k (const $ toDyn v) mySess
+                                     Nothing-> (k,toDyn v) : mySess
+                       liftIO $ modifyMVar_ m (\s-> return $ modifyAtKey hash (const $ makeSessionRecord (expiresIn now) nsess) s)
+                       return ()
+                     
+deleteSession = do hash <- getSessionHash
+                   m   <- fmap _getSession get
+                   case hash of
+                     Just h -> liftIO $ modifyMVar_ m (return . filter ((/= h) . fst))
+                     Nothing-> return ()
+
+sessionGC m = do now <- getCurrentTime
+                 liftIO $ modifyMVar_ m (return . filter ((> now) . getSessionExpireDate . snd))
+
+runSessionGC m = do sessionGC m
+                    threadDelay ( 60 * 1000000 )
+                    runSessionGC m
