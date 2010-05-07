@@ -11,6 +11,7 @@ cabal-version:       >= 1.6
 build-type:          Simple
 
 Library
+  ghc-options: -O2 -threaded -fvia-C 
   hs-source-dirs: src
 
   exposed-modules:
@@ -21,7 +22,7 @@ Library
         Network.EasyHttp.RFC2616
          
   build-depends: 
-                 base,
+                 base >= 3,
                  network-bytestring >= 0.1.2.1,
                  network >= 2.2.1.7,
                  containers >= 0.3.0.0,
