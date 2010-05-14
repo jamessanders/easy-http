@@ -17,6 +17,7 @@ import Data.Time
 -- Types -----------------------------------------------------
 
 data Request = Request { getReqType :: RqType
+                       , getReqURI  :: C.ByteString
                        , getReqPath :: RqPath 
                        , getReqHeaders :: Headers
                        , getCookies :: [(C.ByteString,C.ByteString)]

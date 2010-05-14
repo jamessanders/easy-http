@@ -252,6 +252,7 @@ startHTTP' addr port pc d = do m <- newMVar []
                                          (rp,rg) = C.break (== '?') (R.requestUri prq)
                                          headers'= M.fromList (map simHeaders headers)
                                     in (left,rq { getReqType    = toRqType (R.requestMethod prq)
+                                                , getReqURI     = R.requestUri prq
                                                 , getReqPath    = rp
                                                 , getReqHeaders = headers'
                                                 , getCookies = parseMyCookies headers'
@@ -278,7 +279,7 @@ startHTTP' addr port pc d = do m <- newMVar []
 
 ------------------------------------------------------------------------
 
-emptyRequest = Request GET "/" (M.fromList []) [] Nothing []
+emptyRequest = Request GET "/" "/" (M.fromList []) [] Nothing []
 
 toHeaders = map (uncurry Header) . M.toList
 
