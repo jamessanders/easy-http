@@ -23,8 +23,7 @@ Library
          
   build-depends: 
                  base >= 3,
-                 network-bytestring >= 0.1.2.1,
-                 network >= 2.2.1.7,
+                 network >= 2.2.3.1,
                  containers >= 0.3.0.0,
                  bytestring >= 0.9.1.5,
                  MissingH >= 1.1.0.1,
