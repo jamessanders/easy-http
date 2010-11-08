@@ -31,7 +31,7 @@ import Control.Concurrent.MVar
 import Control.Exception (bracket)
 import Control.Monad.State
 
-import Data.Attoparsec.Char8 
+import Data.Attoparsec.Char8 hiding (isSpace)
 import Data.Char
 import Data.Dynamic
 import Data.Hash.MD5
@@ -44,7 +44,7 @@ import Data.Time
 import Network.BSD
 import Network.EasyHttp.Types
 import Network.Socket
-import Network.Socket.SendFile 
+import Network.Socket.SendFile hiding (Done)
 import Network.URI (unEscapeString)
 
 import System.Directory

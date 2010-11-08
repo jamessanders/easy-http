@@ -1,5 +1,5 @@
 name:                easy-http
-version:             0.1.7
+version:             0.1.8
 synopsis:            <Project description>
 description:         <Project description>
 category:            Network
@@ -28,11 +28,11 @@ Library
                  bytestring >= 0.9.1.5,
                  MissingH >= 1.1.0.1,
                  unix >= 2.4.0.0,
-                 filepath >= 1.1.0.3,
+                 filepath,
                  directory >= 1.0.1.0,
                  sendfile >= 0.6.1,
                  mtl >= 1.1.0.2,
                  time >= 1.1.4,
                  regex-posix >= 0.94.1,
-                 attoparsec >= 0.8.0.2,
+                 attoparsec >= 0.8.2.0,
                  old-locale >= 1.0.0.2
