@@ -28,7 +28,8 @@ module Network.EasyHttp.Server (module Network.EasyHttp.Types
 
 import Control.Concurrent
 import Control.Concurrent.MVar
-import Control.Exception (bracket)
+import qualified Control.Exception as CE
+import Control.Exception (SomeException)
 import Control.Monad.State
 
 import Data.Attoparsec.Char8 hiding (isSpace)
@@ -167,11 +168,11 @@ startSocket = do
 
 startServer addr port postconn hndl = do
   addr' <- inet_addr addr
-  bracket (do sock <- startSocket
-              setSocketOption sock ReuseAddr 1
-              bindSocket sock (SockAddrInet (fromInteger port) addr')
-              listen sock maxListenQueue
-              return sock)
+  CE.bracket (do sock <- startSocket
+                 setSocketOption sock ReuseAddr 1
+                 bindSocket sock (SockAddrInet (fromInteger port) addr')
+                 listen sock maxListenQueue
+                 return sock)
           N.sClose
           (\s-> do case postconn of 
                      (Just pc) -> pc s
@@ -213,8 +214,8 @@ startHTTP' addr port pc d = do m <- newMVar []
                  else return (\s->serve (putHeaders rsp $ M.insert "Connection" "keep-alive" (getHeaders rsp) ) s >> next)
           
            where runHttpHandler m hds =
-                   catch (execStateT f (ServerState hds emptyResponse m))
-                         (\e->return $ ServerState hds (resp500 (C.pack . show $ e)) m)
+                   CE.catch (execStateT f (ServerState hds emptyResponse m))
+                            (\e->return $ ServerState hds (resp500 (C.pack . show $ (e :: SomeException))) m)
 
                  withHeaders sockAddr next = do
                    h  <- readTillEnd ""
